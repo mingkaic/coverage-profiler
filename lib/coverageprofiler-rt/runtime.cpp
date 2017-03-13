@@ -1,6 +1,6 @@
 
 #include <cstdint>
-#include <iostream>
+#include <fstream>
 #include <vector>
 
 
@@ -45,11 +45,33 @@ CVP(print) (void)
 		}
 		coverage[f].second++;
 	}
+	std::ofstream out("coverage-profile.txt");
 	for (uint64_t i = 0; i < CVP(nfuncs); i++)
 	{
 		double percent_coverage = 100 * coverage[i].first / coverage[i].second;
-		std::cout << CVP(funcStr)[i] << ": " << percent_coverage << "%\n";
+		out << CVP(funcStr)[i] << ": " << percent_coverage << "%\n";
 	}
+}
+
+
+struct CVP(printer)
+{
+	~CVP(printer) (void)
+	{
+		// rely on sanitizer to kill this, then we print
+		CVP(print)();
+	}
+
+private:
+	friend void CVP(start) (void);
+	CVP(printer) (void) {}
+};
+
+
+void
+CVP(start) (void)
+{
+	static CVP(printer) inst;
 }
 
 

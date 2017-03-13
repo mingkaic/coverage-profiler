@@ -119,8 +119,11 @@ CoverageProfilingPass::runOnModule(llvm::Module &module)
 		int64Ty, true, GlobalValue::ExternalLinkage,
 		numF, "CoVeRaGePrOfIlInG_nfuncs");
 
-	auto* printer = module.getOrInsertFunction("CoVeRaGePrOfIlInG_print", voidTy, nullptr);
-	appendToGlobalDtors(module, static_cast<Function*>(printer), 0);
+	auto* printer = module.getOrInsertFunction("CoVeRaGePrOfIlInG_start", voidTy, nullptr);
+	appendToGlobalCtors(module, static_cast<Function*>(printer), 0);
+
+//	auto* printer = module.getOrInsertFunction("CoVeRaGePrOfIlInG_print", voidTy, nullptr);
+//	appendToGlobalDtors(module, static_cast<Function*>(printer), 0);
 
 	return true;
 }

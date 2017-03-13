@@ -55,38 +55,38 @@ using llvm::legacy::PassManager;
 
 static cl::OptionCategory coverageProfilerCategory{"coverage profiler options"};
 
-static cl::opt<string> inPath{cl::Positional,
-							cl::desc{"<Module to analyze>"},
-							cl::value_desc{"bitcode filename"},
-							cl::init(""),
-							cl::Required,
-							cl::cat{coverageProfilerCategory}};
+static cl::list<string> inPath{cl::Positional,
+	cl::desc{"<Modules to analyze>"},
+	cl::value_desc{"bitcode filename"},
+//	cl::init(""),
+	cl::OneOrMore,
+	cl::cat{coverageProfilerCategory}};
 
 static cl::opt<string> outFile{"o",
-							cl::desc{"Filename of the instrumented program"},
-							cl::value_desc{"filename"},
-							cl::init(""),
-							cl::cat{coverageProfilerCategory}};
+	cl::desc{"Filename of the instrumented program"},
+	cl::value_desc{"filename"},
+	cl::init(""),
+	cl::cat{coverageProfilerCategory}};
 
 static cl::opt<char> optLevel{
-							"O",
-							cl::desc{"Optimization level. [-O0, -O1, -O2, or -O3] (default = '-O2')"},
-							cl::Prefix,
-							cl::ZeroOrMore,
-							cl::init('2'),
-							cl::cat{coverageProfilerCategory}};
+	"O",
+	cl::desc{"Optimization level. [-O0, -O1, -O2, or -O3] (default = '-O2')"},
+	cl::Prefix,
+	cl::ZeroOrMore,
+	cl::init('2'),
+	cl::cat{coverageProfilerCategory}};
 
 static cl::list<string> libPaths{"L",
-							cl::Prefix,
-							cl::desc{"Specify a library search path"},
-							cl::value_desc{"directory"},
-							cl::cat{coverageProfilerCategory}};
+	cl::Prefix,
+	cl::desc{"Specify a library search path"},
+	cl::value_desc{"directory"},
+	cl::cat{coverageProfilerCategory}};
 
 static cl::list<string> libraries{"l",
-							cl::Prefix,
-							cl::desc{"Specify libraries to link against"},
-							cl::value_desc{"library prefix"},
-							cl::cat{coverageProfilerCategory}};
+	cl::Prefix,
+	cl::desc{"Specify libraries to link against"},
+	cl::value_desc{"library prefix"},
+	cl::cat{coverageProfilerCategory}};
 
 
 static void
@@ -113,13 +113,13 @@ compile(Module& m, StringRef outputPath) {
 	string FeaturesStr;
 	TargetOptions options = InitTargetOptionsFromCodeGenFlags();
 	unique_ptr<TargetMachine> machine(
-			target->createTargetMachine(triple.getTriple(),
-																	MCPU,
-																	FeaturesStr,
-																	options,
-																	getRelocModel(),
-																	CMModel,
-																	level));
+		target->createTargetMachine(triple.getTriple(),
+		MCPU,
+		FeaturesStr,
+		options,
+		getRelocModel(),
+		CMModel,
+		level));
 	assert(machine.get() && "Could not allocate target machine!");
 
 	if (FloatABIForCalls != FloatABI::Default) {
@@ -128,7 +128,7 @@ compile(Module& m, StringRef outputPath) {
 
 	std::error_code errc;
 	auto out =
-			std::make_unique<tool_output_file>(outputPath, errc, sys::fs::F_None);
+		std::make_unique<tool_output_file>(outputPath, errc, sys::fs::F_None);
 	if (!out) {
 		report_fatal_error("Unable to create file:\n " + errc.message());
 	}
@@ -170,15 +170,20 @@ compile(Module& m, StringRef outputPath) {
 
 
 static void
-link(StringRef objectFile, StringRef outputFile) {
-	auto clang = findProgramByName("clang++");
-	string opt("-O");
-	opt += optLevel;
+link(std::vector<string>& objectFiles, StringRef outputFile) {
+	auto ltool = findProgramByName("libtool");
+//	string opt("-O");
+//	opt += optLevel;
 
-	if (!clang) {
-		report_fatal_error("Unable to find clang.");
+	if (!ltool) {
+		report_fatal_error("Unable to find libtool.");
 	}
-	vector<string> args{clang.get(), opt, "-o", outputFile, objectFile};
+	string libName = outputFile.str() + ".a";
+	vector<string> args{ltool.get(), /*opt,*/ "-static", "-o", libName};
+	for (string& objectFile : objectFiles)
+	{
+		args.push_back(objectFile);
+	}
 
 	for (auto& libPath : libPaths) {
 		args.push_back("-L" + libPath);
@@ -201,20 +206,20 @@ link(StringRef objectFile, StringRef outputFile) {
 
 	string err;
 	if (-1 == ExecuteAndWait(
-		clang.get(), &charArgs[0], nullptr, nullptr, 0, 0, &err)) {
+		ltool.get(), &charArgs[0], nullptr, nullptr, 0, 0, &err)) {
 		report_fatal_error("Unable to link output file.");
 	}
 }
 
 
-static void
+static string
 generateBinary(Module& m, StringRef outputFilename) {
 	// Compiling to native should allow things to keep working even when the
 	// version of clang on the system and the version of LLVM used to compile
 	// the tool don't quite match up.
 	string objectFile = outputFilename.str() + ".o";
 	compile(m, objectFile);
-	link(objectFile, outputFilename);
+	return objectFile;
 }
 
 
@@ -231,8 +236,8 @@ saveModule(Module const& m, StringRef filename) {
 }
 
 
-static void
-instrumentModule(Module& module, std::string, const char* argv0) {
+static string
+instrumentModule(Module& module, std::string outModule, const char* argv0) {
 	// Build up all of the passes that we want to run on the module.
 	legacy::PassManager pm;
 	pm.add(new DominatorTreeWrapperPass());
@@ -257,8 +262,15 @@ instrumentModule(Module& module, std::string, const char* argv0) {
 #endif
 	libraries.push_back(RUNTIME_LIB);
 
-	saveModule(module, outFile + ".coverageprofiler.bc");
-	generateBinary(module, outFile);
+	saveModule(module, outModule + ".coverageprofiler.bc");
+	return generateBinary(module, outModule);
+}
+
+
+string fname (string pathname)
+{
+	size_t lastindex = pathname.find_last_of(".");
+	return pathname.substr(0, lastindex);
 }
 
 
@@ -282,16 +294,21 @@ main(int argc, char** argv) {
 	// Construct an IR file from the filename passed on the command line.
 	SMDiagnostic err;
 	LLVMContext context;
-	unique_ptr<Module> module = parseIRFile(inPath.getValue(), err, context);
-
-	if (!module.get()) {
-		errs() << "Error reading bitcode file: " << inPath << "\n";
-		err.print(argv[0], errs());
-		return -1;
-	}
+	std::vector<string> objectFiles;
 
 	if (!outFile.empty()) {
-		instrumentModule(*module, outFile, argv[0]);
+		for (auto& inVal : inPath)
+		{
+			unique_ptr<Module> module = parseIRFile(inVal, err, context);
+
+			if (!module.get()) {
+				errs() << "Error reading bitcode file: " << inVal << "\n";
+				err.print(argv[0], errs());
+				return -1;
+			}
+			objectFiles.push_back(instrumentModule(*module, fname(inVal), argv[0]));
+		}
+		link(objectFiles, outFile);
 	} else {
 		errs() << "No -o selected!\n";
 		return -1;
